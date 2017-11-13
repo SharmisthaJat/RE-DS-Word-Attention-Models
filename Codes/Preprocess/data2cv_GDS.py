@@ -183,8 +183,8 @@ if __name__ == "__main__":
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     print 'point 3 time: ' + '\t\t' + str(now)
 
-    print "Len train:",len(train_new)
-    print "Len dev:",len(dev_new)
+    print "Len train:",len(train)
+    print "Len dev:",len(dev)
     f = open('test_final.p','w')
     cPickle.dump(test, f, -1)
     f.close()

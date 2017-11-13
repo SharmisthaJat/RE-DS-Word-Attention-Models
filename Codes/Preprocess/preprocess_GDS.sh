@@ -1,3 +1,4 @@
+python2.7 tolowercase.py
 g++ extract_GDS.cpp -o extract_GDS -O2 -lpthread
 ./extract_GDS
 python2.7 dataset_GDS.py
