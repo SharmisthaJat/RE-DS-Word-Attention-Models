@@ -20,7 +20,7 @@ import getopt
 print "Please Note That CUDA is required for the model to run"
 use_cuda = torch.cuda.is_available()
 print use_cuda
-gpu = 2
+gpu = 3
 
 def parse_argv(argv):
     opts, args = getopt.getopt(sys.argv[1:], "he:i:o:m:",
@@ -127,9 +127,30 @@ class WordAttentionSimple(nn.Module):
         attention_values = self.relationVector(F.tanh(self.relationMatrix(gru.view(-1,gru.size(2))))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
         # attention_values = self.relationVector(F.tanh(gru.view(gru.size(0),-1))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
         attention_exp = torch.exp(attention_values) * mask
+
         attention_values_sum = torch.sum(attention_exp,1).expand(gru.size(0), self.input_words, self.gru_layers*2)
         attention_values_softmax = (attention_exp/attention_values_sum)
         attention_embeddings_softmax = gru * attention_values_softmax
+        # attention_sentence_embedding = torch.sum(attention_embeddings_softmax,1).view((-1, self.gru_layers*2))
+        return attention_embeddings_softmax, attention_values_softmax
+
+class WordAttentionEntity(nn.Module):
+    def __init__(self, input_dim, gru_layers, input_words):
+        super(WordAttentionEntity,self).__init__()
+        self.input_dim = input_dim
+        self.gru_layers = gru_layers
+        self.input_words = input_words
+        self.relationMatrix = nn.Linear(gru_layers*2, gru_layers*2, bias=False)
+        self.relationVector = nn.Linear(gru_layers*2, 1, bias=False)
+
+    def forward(self, embedding, gru, mask):
+        attention_values = self.relationVector(F.tanh(self.relationMatrix(gru.view(-1,gru.size(2))))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers)
+        # attention_values = self.relationVector(F.tanh(gru.view(gru.size(0),-1))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
+        attention_exp = torch.exp(attention_values) * mask
+
+        attention_values_sum = torch.sum(attention_exp,1).expand(gru.size(0), self.input_words, self.gru_layers)
+        attention_values_softmax = (attention_exp/attention_values_sum)
+        attention_embeddings_softmax = embedding * attention_values_softmax
         # attention_sentence_embedding = torch.sum(attention_embeddings_softmax,1).view((-1, self.gru_layers*2))
         return attention_embeddings_softmax, attention_values_softmax
 
@@ -150,13 +171,6 @@ class PieceWisePool(nn.Module):
         concat_all = torch.cat(concat_list,0)
         return concat_all
 
-class SumAttention(nn.Module):
-    def __init__(self):
-        super(SumAttention, self).__init__()
-        
-    def forward(self, gru):
-        return torch.sum(gru, 1).squeeze(1)
-
 class CNNwithPool(nn.Module):
     def __init__(self, cnn_layers, kernel_size):
     	super(CNNwithPool,self).__init__()
@@ -168,6 +182,12 @@ class CNNwithPool(nn.Module):
         concat_list = []
         for index, entity in enumerate(entity_pos):
             elem = cnn.narrow(0,index,1)
+            if entity[0] > 78:
+                entity[0] = 78
+            if entity[1] > 78:
+                entity[1] = 78
+            if entity[0] == entity[1]:
+                entity[1] += 1
             pool1 = F.max_pool2d(elem.narrow(2,0,entity[0]),(entity[0],1))
             pool2 = F.max_pool2d(elem.narrow(2,entity[0],entity[1]-entity[0]),(entity[1]-entity[0],1))
             pool3 = F.max_pool2d(elem.narrow(2,entity[1],cnn.size(2)-entity[1]),(cnn.size(2)-entity[1],1))
@@ -175,6 +195,27 @@ class CNNwithPool(nn.Module):
             concat_list.append(concat_pool)
         concat_all = torch.cat(concat_list,0)
         return concat_all
+
+class EntitySpecificEmbedding(nn.Module):
+    def __init__(self):
+        super(EntitySpecificEmbedding, self).__init__()
+
+    def forward(self, inputs, entity_pos):
+        mask = 1. - torch.eq(inputs,0.).float().narrow(inputs.dim()-1,0,1).expand(inputs.size(0), inputs.size(1), inputs.size(2), inputs.size(3)*2)
+        mask_small = mask.narrow(inputs.dim()-1, 0, inputs.size(3))
+        input_embedding1 = []
+        input_embedding2 = []
+        for index, entity in enumerate(entity_pos):
+            sentence = inputs.narrow(0,index,1)
+            entity1 = sentence.narrow(2,entity[0],1).expand(1, 1, sentence.size(2), sentence.size(3))
+            entity2 = sentence.narrow(2,entity[1],1).expand(1, 1, sentence.size(2), sentence.size(3))
+            embedding1 = torch.cat((sentence, entity1), sentence.dim() - 1)
+            embedding2 = torch.cat((sentence, entity2), sentence.dim() - 1)
+            input_embedding1.append(embedding1)
+            input_embedding2.append(embedding2)
+        input_e1 = torch.cat(input_embedding1, 0) * mask
+        input_e2 = torch.cat(input_embedding2, 0) * mask
+        return input_e1, input_e2, mask_small
 
 class PCNN(nn.Module):
     def __init__(self, word_length, feature_length, cnn_layers, Wv, pf1, pf2, kernel_size, word_size=50, feature_size=5, dropout=0.5, num_classes=53, num_words=82):
@@ -188,25 +229,31 @@ class PCNN(nn.Module):
         self.num_classes = num_classes
 
         self.embeddings = getEmbeddings(self.word_size, self.word_length, self.feature_size, self.feature_length, Wv, pf1, pf2)
-        self.gru = GRU(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
-        self.wordAttention = WordAttentionSimple(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
+        #self.gru = GRU(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
+        #self.wordAttention = WordAttentionSimple(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
+        self.entityAttention1 = WordAttentionEntity(self.num_classes, (self.word_size + 2*self.feature_size), num_words)
+        self.entityAttention2 = WordAttentionEntity(self.num_classes, (self.word_size + 2*self.feature_size), num_words)
         self.pieceWisePool = PieceWisePool()
-        # self.word_attention = CommonWordAttention(self.num_classes, self.cnn_layers*2)
-        # self.cnn = CNNwithPool(self.cnn_layers, self.kernel_size)
+        self.entityEmbedding = EntitySpecificEmbedding()
+        self.cnn = CNNwithPool(self.cnn_layers, self.kernel_size)
         self.drop = nn.Dropout(dropout)
-        print self.num_classes
-        self.linear = nn.Linear(self.cnn_layers*6, self.num_classes)
+        self.linear = nn.Linear(self.cnn_layers*3 + (self.word_size + 2*self.feature_size)*6, self.num_classes)
 
     def forward(self, x, ldist, rdist, pool):
         embeddings = self.embeddings(x,ldist,rdist)
-        gru, mask = self.gru(embeddings)
-        wordAttention, attention_scores = self.wordAttention(gru,mask)  
-        pieceWisePool = self.pieceWisePool(wordAttention, pool)
-        #pieceWisePool = self.pieceWisePool(wordAttention)
-        sentence_embedding = F.tanh(pieceWisePool)
+        #gru, mask = self.gru(embeddings)
+        #wordAttention, attention_scores = self.wordAttention(gru,mask)
+        #pieceWisePool = self.pieceWisePool(wordAttention, pool)
+        cnn = self.cnn(embeddings,pool).view((embeddings.size(0),-1))
+        entityEmbedding1, entityEmbedding2, entityMask = self.entityEmbedding(embeddings, pool)
+        entity1_attention, entity1_attention_values = self.entityAttention1(embeddings.squeeze(1), entityEmbedding1.squeeze(1), entityMask)
+        entity2_attention, entity2_attention_values = self.entityAttention2(embeddings.squeeze(1), entityEmbedding2.squeeze(1), entityMask)
+        entity1_pool = self.pieceWisePool(entity1_attention, pool)
+        entity2_pool = self.pieceWisePool(entity2_attention, pool)
+        sentence_embedding = F.tanh(torch.cat((cnn, entity1_pool, entity2_pool), cnn.dim() -1))
         cnn_dropout = self.drop(sentence_embedding)
         probabilities = self.linear(cnn_dropout)
-        return probabilities, [attention_scores]
+        return probabilities, entity1_attention_values
 
 def trainModel(train, test, dev, epochs, directory, Wv, pf1, pf2, batch=50, num_classes=53, max_sentences=5, img_h=82, to_train=1, test_epoch=0):
     model = PCNN(word_length=len(Wv), feature_length=len(pf1), cnn_layers=230, kernel_size=(3,60), Wv=Wv, pf1=pf1, pf2=pf2, num_classes=num_classes)
@@ -216,8 +263,7 @@ def trainModel(train, test, dev, epochs, directory, Wv, pf1, pf2, batch=50, num_
     [test_label, test_sents, test_pos, test_ldist, test_rdist, test_entity, test_epos] = bags_decompose(test)
     [dev_label, dev_sents, dev_pos, dev_ldist, dev_rdist, dev_entity, dev_epos] = bags_decompose(dev)
     [train_label, train_sents, train_pos, train_ldist, train_rdist, train_entity, train_epos] = bags_decompose(train)
-    print "0.2"
-    optimizer = optim.SGD(model.parameters(), lr=0.2)
+    optimizer = optim.SGD(model.parameters(), lr=0.1)
     # optimizer = optim.Adam(model.parameters())
     if test_epoch != 0 and to_train==1:
         print "Loading:","model_"+str(test_epoch)
@@ -263,190 +309,81 @@ def trainModel(train, test, dev, epochs, directory, Wv, pf1, pf2, batch=50, num_
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now),"\tDone Epoch",(epoch),"\tLoss:",total_loss
             torch.save({'epoch': epoch ,'state_dict': model.state_dict(),'optimizer': optimizer.state_dict()}, directory+"model_"+str(epoch))
+
+            model.eval()
+            dev_predict = get_test3(dev_label, dev_sents, dev_pos, dev_ldist, dev_rdist, dev_epos, img_h, num_classes, max_sentences, model, batch=2000)
+
+            if to_train == 1:
+                cPickle.dump(dev_predict,open(directory+"predict_prob_dev_"+str(epoch),"wb"))
+            else:
+                cPickle.dump(dev_predict,open(directory+"predict_prob_dev_temp_"+str(epoch),"wb"))
+            print "Test"
+
+            dev_pr = pr(dev_predict[3], dev_predict[2], dev_entity)
+            accuracy(dev_predict[3], dev_predict[2])
+            one_hot = []
+            results = dev_predict[3]
+            for labels in dev_label:
+                arr = np.zeros(shape=(num_classes-1,),dtype='int32')
+                for label in labels:
+                    if label != 0:
+                        arr[label-1] = 1
+                one_hot.append(arr)
+            one_hot = np.array(one_hot)
+            results = results[:,1:]
+            score = average_precision_score(one_hot, results, average='micro')
+            if to_train == 1:
+                out = open(directory+"pr_dev_"+str(epoch),"wb")
+            else:
+                out = open(directory+"pr_dev_temp_"+str(epoch),"wb")
+            for res in dev_pr[3]:
+                out.write(str(res[0])+"\t"+str(res[1])+"\n")
+            out.close()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            precision = -1
+            recall = -1
+            print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(dev_pr[0]) + "\t Recall: "+str(dev_pr[1])+ "\t Total: "+ str(dev_pr[2])
         else:
             print "Loading:","model_"+str(epoch)
             checkpoint = torch.load(directory+"model_"+str(epoch), map_location=lambda storage, loc: storage)
             model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-        model.eval()
-        dev_predict = get_test3(dev_label, dev_sents, dev_pos, dev_ldist, dev_rdist, dev_epos, img_h, num_classes, max_sentences, model, batch=2000)
-
-        if to_train == 1:
-            cPickle.dump(dev_predict,open(directory+"predict_prob_dev_"+str(epoch),"wb"))
-        else:
-            cPickle.dump(dev_predict,open(directory+"predict_prob_dev_temp_"+str(epoch),"wb"))
-        print "Test"
-
-        dev_pr = pr(dev_predict[3], dev_predict[2], dev_entity)
-        accuracy(dev_predict[3], dev_predict[2])
-        one_hot = []
-        results = dev_predict[3]
-        for labels in dev_label:
-            arr = np.zeros(shape=(num_classes-1,),dtype='int32')
-            for label in labels:
-                if label != 0:
-                    arr[label-1] = 1
-            one_hot.append(arr)
-        one_hot = np.array(one_hot)
-        results = results[:,1:]
-        score = average_precision_score(one_hot, results, average='micro')
-        if to_train == 1:
-            out = open(directory+"pr_dev_"+str(epoch),"wb")
-        else:
-            out = open(directory+"pr_dev_temp_"+str(epoch),"wb")
-        for res in dev_pr[3]:
-            out.write(str(res[0])+"\t"+str(res[1])+"\n")
-        out.close()
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        precision = -1
-        recall = -1
-        print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(dev_pr[0]) + "\t Recall: "+str(dev_pr[1])+ "\t Total: "+ str(dev_pr[2])
+            optimizer.load_state_dict(checkpoint['optimizer'])    
         
-        
-        
-        test_predict = get_attention_scores(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, test_entity, img_h, num_classes, max_sentences, model, batch=2000)
-        # test_predict = visualize_attention(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
-        if to_train == 1:
-            cPickle.dump(test_predict,open(directory+"predict_prob_"+str(epoch),"wb"))
-        else:
-            cPickle.dump(test_predict,open(directory+"predict_prob_temp_"+str(epoch),"wb"))
-        print "Test"
-
-        test_pr = pr(test_predict[3], test_predict[2], test_entity)
-        accuracy(test_predict[3], test_predict[2])
-        one_hot = []
-        results = test_predict[3]
-        for labels in test_label:
-            arr = np.zeros(shape=(num_classes-1,),dtype='int32')
-            for label in labels:
-                if label != 0:
-                    arr[label-1] = 1
-            one_hot.append(arr)
-        one_hot = np.array(one_hot)
-        results = results[:,1:]
-        score = average_precision_score(one_hot, results, average='micro')
-        if to_train == 1:
-            out = open(directory+"pr_"+str(epoch),"wb")
-        else:
-            out = open(directory+"pr_temp_"+str(epoch),"wb")
-        for res in test_pr[3]:
-            out.write(str(res[0])+"\t"+str(res[1])+"\n")
-        out.close()
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        precision = -1
-        recall = -1
-        print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(test_pr[0]) + "\t Recall: "+str(test_pr[1])+ "\t Total: "+ str(test_pr[2])
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
-        print '\n'
-
-def get_attention_scores(label, sents, pos, ldist, rdist, epos, entity, img_h , numClasses, maxSentences, testModel, filterSize = 3, batch = 1000):
-    numBags = len(label)
-    predict_y = np.zeros((numBags), dtype='int32')
-    predict_y_prob = np.zeros((numBags), dtype='float32')
-    predict_y_dist = np.zeros((numBags, numClasses), dtype='float32')
-    # y = np.asarray(rels, dtype='int32')
-    numSentences = 0
-    for ind in range(len(sents)):
-        numSentences += len(sents[ind])
-    print "Num Sentences:", numSentences
-    insX = np.zeros((numSentences, img_h), dtype='int32')
-    insPf1 = np.zeros((numSentences, img_h), dtype='int32')
-    insPf2 = np.zeros((numSentences, img_h), dtype='int32')
-    insPool = np.zeros((numSentences, 2), dtype='int32')
-    insEntity = np.zeros((numSentences,2), dtype='int32')
-    currLine = 0
-    for bagIndex, insRel in enumerate(label):
-        insNum = len(sents[bagIndex])
-        for m in range(insNum):
-            insX[currLine] = np.asarray(sents[bagIndex][m], dtype='int32').reshape((1, img_h))
-            insPf1[currLine] = np.asarray(ldist[bagIndex][m], dtype='int32').reshape((1, img_h))
-            insPf2[currLine] = np.asarray(rdist[bagIndex][m], dtype='int32').reshape((1, img_h))
-            insEntity[currLine] = np.asarray(entity[bagIndex], dtype='int32').reshape((1, 2))
-            epos[bagIndex][m] = sorted(epos[bagIndex][m])
-            if epos[bagIndex][m][0] > 79:
-                epos[bagIndex][m][0] = 79
-            if epos[bagIndex][m][1] > 79:
-                epos[bagIndex][m][1] = 79
-            if epos[bagIndex][m][0] == epos[bagIndex][m][1]:
-                insPool[currLine] = np.asarray([epos[bagIndex][m][0]+int(filterSize/2), epos[bagIndex][m][1]+ int(filterSize/2) + 1], dtype='int32').reshape((1, 2))
+            test_predict = get_test3(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
+            # test_predict = visualize_attention(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
+            if to_train == 1:
+                cPickle.dump(test_predict,open(directory+"predict_prob_"+str(epoch),"wb"))
             else:
-                insPool[currLine] = np.asarray([epos[bagIndex][m][0]+int(filterSize/2), epos[bagIndex][m][1]+ int(filterSize/2)], dtype='int32').reshape((1, 2))
-            currLine += 1
-    insX = np.array(insX.tolist())
-    insPf1 = np.array(insPf1.tolist())
-    insPf2 = np.array(insPf2.tolist())
-    insPool = np.array(insPool.tolist())
-    results = []
-    totalBatches = int(math.ceil(float(insX.shape[0])/batch))
-    results = np.zeros((numSentences, numClasses), dtype='float32')
-    print "totalBatches:",totalBatches
-    samples = insX.shape[0]
-    batches = _make_batches(samples, batch)
-    index_array = np.arange(samples)
-    attention_scores_all = []
-    for batch_index, (batch_start, batch_end) in enumerate(batches):
-        print batch_index, (batch_start, batch_end)
+                cPickle.dump(test_predict,open(directory+"predict_prob_temp_"+str(epoch),"wb"))
+            print "Test"
 
-        batch_ids = index_array[batch_start:batch_end]
-        x_batch = autograd.Variable(torch.from_numpy(_slice_arrays(insX, batch_ids)).long().cuda(gpu), volatile=True)
-        l_batch = autograd.Variable(torch.from_numpy(_slice_arrays(insPf1, batch_ids)).long().cuda(gpu), volatile=True)
-        r_batch = autograd.Variable(torch.from_numpy(_slice_arrays(insPf2, batch_ids)).long().cuda(gpu), volatile=True)
-        # e_batch = autograd.Variable(torch.from_numpy(_slice_arrays(insPool, batch_ids)).long().cuda(gpu), volatile=True)
-        e_batch = torch.from_numpy(_slice_arrays(insPool, batch_ids)).long().cuda(gpu)
-        results_batch, attention_scores = testModel(x_batch, l_batch, r_batch, e_batch)
-        attention_scores = [x.data.cpu().numpy() for x in attention_scores]
-        for idd in range(len(batch_ids)):
-            attention_scores_all.append([attention_scores[0][idd,:,0]])
-        results[batch_start:batch_end,:] = F.softmax(results_batch).data.cpu().numpy()
-    print np.array(attention_scores_all).shape
-    # print results
-    rel_type_arr = np.argmax(results,axis=-1)
-    max_prob = np.amax(results, axis=-1)
-    currLine = 0
-    attention_scores_final = []
-    for bagIndex, insRel in enumerate(label):
-        insNum = len(sents[bagIndex])
-        maxP = -1
-        pred_rel_type = 0
-        max_pos_p = -1
-        positive_flag = False
-        max_vec = []
-        selectedLine = 0
-        for m in range(insNum):
-            rel_type = rel_type_arr[currLine]
-            if positive_flag and rel_type == 0:
-                currLine += 1
-                continue
+            test_pr = pr(test_predict[3], test_predict[2], test_entity)
+            accuracy(test_predict[3], test_predict[2])
+            one_hot = []
+            results = test_predict[3]
+            for labels in test_label:
+                arr = np.zeros(shape=(num_classes-1,),dtype='int32')
+                for label in labels:
+                    if label != 0:
+                        arr[label-1] = 1
+                one_hot.append(arr)
+            one_hot = np.array(one_hot)
+            results = results[:,1:]
+            score = average_precision_score(one_hot, results, average='micro')
+            if to_train == 1:
+                out = open(directory+"pr_"+str(epoch),"wb")
             else:
-                # at least one instance is positive
-                tmpMax = max_prob[currLine]
-                if rel_type > 0:
-                    positive_flag = True
-                    if tmpMax > max_pos_p:
-                        max_pos_p = tmpMax
-                        pred_rel_type = rel_type
-                        max_vec = np.copy(results[currLine])
-                        selectedLine = currLine
-                else:
-                    if tmpMax > maxP:
-                        maxP = tmpMax
-                        max_vec = np.copy(results[currLine])
-                        selectedLine = currLine
-                currLine += 1
-        if positive_flag:
-            predict_y_prob[bagIndex] = max_pos_p
-        else:
-            predict_y_prob[bagIndex] = maxP
-        predict_y_dist[bagIndex] =  np.asarray(np.copy(max_vec), dtype='float32').reshape((1,numClasses))
-        predict_y[bagIndex] = pred_rel_type
-        if predict_y[bagIndex] > 0.7:
-            attention_scores_final.append([insEntity[selectedLine], insX[selectedLine], predict_y_prob[bagIndex], attention_scores_all[selectedLine]])
-    print len(attention_scores)
-        # print np.array(attention_scores_final)
-    cPickle.dump(attention_scores_final, open('attention_scores_final_gru_google.p','wb'), -1)
-    return [predict_y, predict_y_prob, label, predict_y_dist]
-
+                out = open(directory+"pr_temp_"+str(epoch),"wb")
+            for res in test_pr[3]:
+                out.write(str(res[0])+"\t"+str(res[1])+"\n")
+            out.close()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            precision = -1
+            recall = -1
+            print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(test_pr[0]) + "\t Recall: "+str(test_pr[1])+ "\t Total: "+ str(test_pr[2])
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
+            print '\n'
 
 
 def bags_decompose(data_bags):
@@ -471,77 +408,6 @@ def accuracy(predict_y, true_y):
                 correct += 1
     print "accuracy: ",float(correct)/count, correct, count
 
-def pr_max(predict_y, true_y, entity_pair):
-    predictions = np.argmax(predict_y, axis=1)
-    probabilities = np.amax(predict_y, axis=1)
-    final_labels = []
-    for label in true_y:
-        if 0 in label and len(label) > 1:
-            label = [x for x in label if x!=0]
-        final_labels.append(label[:])
-
-    total = 0
-    for label in final_labels:
-        if 0 in label:
-            continue
-        else:
-            total += 1
-    print "Total:",total
-
-    results = []
-    for i in range(len(predictions)):
-
-        results.append([i,predictions[i],probabilities[i],entity_pair[i]])
-    resultSorted = sorted(results, key=operator.itemgetter(2),reverse=True)
-    f_ = open('final_model_max.csv','w')
-    for g,item in enumerate(resultSorted):
-        f_.write(str(item[1]) + ":::"+str(final_labels[item[0]])+ ":::" + str(item[2])+":::"+str(item[3])+"\n")
-    f_.close()
-    p_p = 0.0
-    p_n = 0.0
-    n_p = 0.0
-    pr = []
-    prec = 0.0
-    rec = 0.0
-    p_p_final = 0.0
-    p_n_final = 0.0
-    n_p_final = 0.0
-    prev = -1
-    print "NumBags", len(resultSorted), len(predictions), len(probabilities)
-    for g,item in enumerate(resultSorted):
-        prev = item[2]
-        if 0 in final_labels[item[0]]:
-            if item[1] == 0:
-                continue
-            else:
-                n_p += 1
-        else:
-            if item[1] != 0:
-                if item[1] in final_labels[item[0]]:
-                    p_p += 1
-                else:
-                    p_n += 1
-        # if g%100 == 0:
-            # print "Precision:",(p_p)/(p_p+n_p)
-            # print "Recall",(p_p)/total
-
-        try:
-            pr.append([(p_p)/(p_p+n_p+p_n), (p_p)/total])
-        except:
-            pr.append([1, (p_p)/total])
-        if rec <= 0.3:
-            try:
-                prec = (p_p)/(p_p+n_p+p_n)
-            except:
-                prec = 1.0
-            rec = (p_p)/total
-            p_p_final = p_p
-            p_n_final = p_n
-            n_p_final = n_p
-
-
-    print "p_p:",p_p_final,"n_p:",n_p_final,"p_n:",p_n_final
-    return [prec,rec,total,pr]
 
 def pr(predict_y, true_y,entity_pair):
     final_labels = []
@@ -562,10 +428,6 @@ def pr(predict_y, true_y,entity_pair):
         for j in range(1, predict_y.shape[1]):
             results.append([i,j,predict_y[i][j],entity_pair[i]])
     resultSorted = sorted(results, key=operator.itemgetter(2),reverse=True)
-    f_ = open('final_model.csv','w')
-    for g,item in enumerate(resultSorted):
-        f_.write(str(item[1]) + ":::"+str(final_labels[item[0]])+ ":::" + str(item[2])+":::"+str(item[3])+"\n")
-    f_.close()
     p_p = 0.0
     p_n = 0.0
     n_p = 0.0
@@ -765,6 +627,7 @@ def select_instance3(label, sents, pos, ldist, rdist, epos, img_h , numClasses, 
     # print e, e.shape
     results = np.zeros((totalSents, numClasses), dtype='float32')
     print "totalBatches:",totalBatches
+    print batch, x.shape[0]
     samples = x.shape[0]
     batches = _make_batches(samples, batch)
     index_array = np.arange(samples)
@@ -819,47 +682,42 @@ def select_instance3(label, sents, pos, ldist, rdist, epos, img_h , numClasses, 
 
 
 if __name__ == "__main__":
-    inputdir = "final_google_dataset_bag_size_variation"
+    if len(sys.argv) < 6:
+        print "Please enter the arguments correctly!"
+        sys.exit()
+
+    inputdir = sys.argv[1] + "/"
     resultdir = inputdir
-    for i in range(1,2):
-        resultdir = "/scratchd/home/siddesh/DocumentTimestamp/PCNN+ATT/GRU_bag_variation_results_LR0.2/"+str(i)+'/'
-        print 'result dir='+resultdir
-        if not os.path.exists(resultdir):
-            os.mkdir(resultdir)
-    
-        dataType = "_features_all_6Months"
-        test = cPickle.load(open(inputdir+'/test_google_final_'+str(i)+'.p'))
-        train = cPickle.load(open(inputdir+'/train_google_final_'+str(i)+'.p'))
-        dev = cPickle.load(open(inputdir+'/dev_google_final_'+str(i)+'.p'))
-        # train = test
-        # random.shuffle(test)
-        # dev = test[:10000]
-        # test_reduced = test[10000:]
-        # cPickle.dump(test_reduced,open(inputdir+"test_90percent.p","w"))
-        # cPickle.dump(dev,open(inputdir+"test_10percent.p","w"))
-        # dev = cPickle.load(open(inputdir+"test_10percent.p"))
-        # train = []
-        # train = test = []
-        print 'load Wv ...'
-        Wv = np.array(cPickle.load(open(inputdir+'/Wv.p')))
-    
-        # Wv = np.random.random((10,50))
-        # Wv[0] = Wv[0]*0
-        print Wv[0]
-        # rng = np.random.RandomState(3435)
-        PF1 = np.asarray(np.random.uniform(low=-1, high=1, size=[101, 5]), dtype='float32')
-        padPF1 = np.zeros((1, 5))
-        PF1 = np.vstack((padPF1, PF1))
-        PF2 = np.asarray(np.random.uniform(low=-1, high=1, size=[101, 5]), dtype='float32')
-        padPF2 = np.zeros((1, 5))
-        PF2 = np.vstack((padPF2, PF2))
-        print PF1[0]
-        print PF2[0]
-        trainModel(train,
-                        test,
-                        dev,
-                        500,
-        				resultdir,
-                        Wv,
-                        PF1,
-                        PF2,batch=50, test_epoch=0, num_classes=5)
+    resultdir = "EA/"
+    print 'result dir='+resultdir
+    if not os.path.exists(resultdir):
+        os.mkdir(resultdir)
+
+
+    dataType = "_features_all_6Months"
+    test = cPickle.load(open(inputdir+sys.argv[3]))
+    train = cPickle.load(open(inputdir+sys.argv[2]))
+    dev = cPickle.load(open(inputdir+sys.argv[4]))
+    print 'load Wv ...'
+    Wv = np.array(cPickle.load(open(inputdir+sys.argv[5])))
+
+    # Wv = np.random.random((10,50))
+    # Wv[0] = Wv[0]*0
+    print Wv[0]
+    # rng = np.random.RandomState(3435)
+    PF1 = np.asarray(np.random.uniform(low=-1, high=1, size=[101, 5]), dtype='float32')
+    padPF1 = np.zeros((1, 5))
+    PF1 = np.vstack((padPF1, PF1))
+    PF2 = np.asarray(np.random.uniform(low=-1, high=1, size=[101, 5]), dtype='float32')
+    padPF2 = np.zeros((1, 5))
+    PF2 = np.vstack((padPF2, PF2))
+    print PF1[0]
+    print PF2[0]
+    trainModel(train,
+                    test,
+                    dev,
+                    50,
+                    resultdir,
+                    Wv,
+                    PF1,
+                    PF2,batch=50, test_epoch=0, to_train=1, num_classes=53)

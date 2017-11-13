@@ -20,7 +20,7 @@ import getopt
 print "Please Note That CUDA is required for the model to run"
 use_cuda = torch.cuda.is_available()
 print use_cuda
-gpu = 3
+gpu = 0
 
 def parse_argv(argv):
     opts, args = getopt.getopt(sys.argv[1:], "he:i:o:m:",
@@ -46,7 +46,7 @@ def parse_argv(argv):
     return [epochs, inputs, output, mode]
 
 class DocumentContainer(object):
-    def __init__(self, entity_pair, sentences, label,pos,l_dist,r_dist,entity_pos):
+    def __init__(self, entity_pair, sentences, label,l_dist,r_dist,entity_pos):
         self.entity_pair = entity_pair
         self.sentences = sentences
         self.label = label
@@ -127,30 +127,9 @@ class WordAttentionSimple(nn.Module):
         attention_values = self.relationVector(F.tanh(self.relationMatrix(gru.view(-1,gru.size(2))))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
         # attention_values = self.relationVector(F.tanh(gru.view(gru.size(0),-1))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
         attention_exp = torch.exp(attention_values) * mask
-
         attention_values_sum = torch.sum(attention_exp,1).expand(gru.size(0), self.input_words, self.gru_layers*2)
         attention_values_softmax = (attention_exp/attention_values_sum)
         attention_embeddings_softmax = gru * attention_values_softmax
-        # attention_sentence_embedding = torch.sum(attention_embeddings_softmax,1).view((-1, self.gru_layers*2))
-        return attention_embeddings_softmax, attention_values_softmax
-
-class WordAttentionEntity(nn.Module):
-    def __init__(self, input_dim, gru_layers, input_words):
-        super(WordAttentionEntity,self).__init__()
-        self.input_dim = input_dim
-        self.gru_layers = gru_layers
-        self.input_words = input_words
-        self.relationMatrix = nn.Linear(gru_layers*2, gru_layers*2, bias=False)
-        self.relationVector = nn.Linear(gru_layers*2, 1, bias=False)
-
-    def forward(self, embedding, gru, mask):
-        attention_values = self.relationVector(F.tanh(self.relationMatrix(gru.view(-1,gru.size(2))))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers)
-        # attention_values = self.relationVector(F.tanh(gru.view(gru.size(0),-1))).view((gru.size(0), self.input_words)).unsqueeze(2).expand(gru.size(0), self.input_words, self.gru_layers*2)
-        attention_exp = torch.exp(attention_values) * mask
-
-        attention_values_sum = torch.sum(attention_exp,1).expand(gru.size(0), self.input_words, self.gru_layers)
-        attention_values_softmax = (attention_exp/attention_values_sum)
-        attention_embeddings_softmax = embedding * attention_values_softmax
         # attention_sentence_embedding = torch.sum(attention_embeddings_softmax,1).view((-1, self.gru_layers*2))
         return attention_embeddings_softmax, attention_values_softmax
 
@@ -196,27 +175,6 @@ class CNNwithPool(nn.Module):
         concat_all = torch.cat(concat_list,0)
         return concat_all
 
-class EntitySpecificEmbedding(nn.Module):
-    def __init__(self):
-        super(EntitySpecificEmbedding, self).__init__()
-
-    def forward(self, inputs, entity_pos):
-        mask = 1. - torch.eq(inputs,0.).float().narrow(inputs.dim()-1,0,1).expand(inputs.size(0), inputs.size(1), inputs.size(2), inputs.size(3)*2)
-        mask_small = mask.narrow(inputs.dim()-1, 0, inputs.size(3))
-        input_embedding1 = []
-        input_embedding2 = []
-        for index, entity in enumerate(entity_pos):
-            sentence = inputs.narrow(0,index,1)
-            entity1 = sentence.narrow(2,entity[0],1).expand(1, 1, sentence.size(2), sentence.size(3))
-            entity2 = sentence.narrow(2,entity[1],1).expand(1, 1, sentence.size(2), sentence.size(3))
-            embedding1 = torch.cat((sentence, entity1), sentence.dim() - 1)
-            embedding2 = torch.cat((sentence, entity2), sentence.dim() - 1)
-            input_embedding1.append(embedding1)
-            input_embedding2.append(embedding2)
-        input_e1 = torch.cat(input_embedding1, 0) * mask
-        input_e2 = torch.cat(input_embedding2, 0) * mask
-        return input_e1, input_e2, mask_small
-
 class PCNN(nn.Module):
     def __init__(self, word_length, feature_length, cnn_layers, Wv, pf1, pf2, kernel_size, word_size=50, feature_size=5, dropout=0.5, num_classes=53, num_words=82):
         super(PCNN, self).__init__()
@@ -231,13 +189,10 @@ class PCNN(nn.Module):
         self.embeddings = getEmbeddings(self.word_size, self.word_length, self.feature_size, self.feature_length, Wv, pf1, pf2)
         #self.gru = GRU(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
         #self.wordAttention = WordAttentionSimple(self.word_size + 2*self.feature_size, self.cnn_layers, num_words)
-        self.entityAttention1 = WordAttentionEntity(self.num_classes, (self.word_size + 2*self.feature_size), num_words)
-        self.entityAttention2 = WordAttentionEntity(self.num_classes, (self.word_size + 2*self.feature_size), num_words)
-        self.pieceWisePool = PieceWisePool()
-        self.entityEmbedding = EntitySpecificEmbedding()
+        #self.pieceWisePool = PieceWisePool()
         self.cnn = CNNwithPool(self.cnn_layers, self.kernel_size)
         self.drop = nn.Dropout(dropout)
-        self.linear = nn.Linear(self.cnn_layers*3 + (self.word_size + 2*self.feature_size)*6, 53)
+        self.linear = nn.Linear(self.cnn_layers*3, self.num_classes)
 
     def forward(self, x, ldist, rdist, pool):
         embeddings = self.embeddings(x,ldist,rdist)
@@ -245,18 +200,14 @@ class PCNN(nn.Module):
         #wordAttention, attention_scores = self.wordAttention(gru,mask)
         #pieceWisePool = self.pieceWisePool(wordAttention, pool)
         cnn = self.cnn(embeddings,pool).view((embeddings.size(0),-1))
-        entityEmbedding1, entityEmbedding2, entityMask = self.entityEmbedding(embeddings, pool)
-        entity1_attention, entity1_attention_values = self.entityAttention1(embeddings.squeeze(1), entityEmbedding1.squeeze(1), entityMask)
-        entity2_attention, entity2_attention_values = self.entityAttention2(embeddings.squeeze(1), entityEmbedding2.squeeze(1), entityMask)
-        entity1_pool = self.pieceWisePool(entity1_attention, pool)
-        entity2_pool = self.pieceWisePool(entity2_attention, pool)
-        sentence_embedding = F.tanh(torch.cat((cnn, entity1_pool, entity2_pool), cnn.dim() -1))
-        cnn_dropout = self.drop(sentence_embedding)
+        #sentence_embedding = F.tanh(torch.cat((cnn, pieceWisePool), cnn.dim() -1))
+        cnn_dropout = self.drop(cnn)
         probabilities = self.linear(cnn_dropout)
-        return probabilities, entity1_attention_values
+        return probabilities, []
+
 
 def trainModel(train, test, dev, epochs, directory, Wv, pf1, pf2, batch=50, num_classes=53, max_sentences=5, img_h=82, to_train=1, test_epoch=0):
-    model = PCNN(word_length=len(Wv), feature_length=len(pf1), cnn_layers=230, kernel_size=(3,60), Wv=Wv, pf1=pf1, pf2=pf2)
+    model = PCNN(word_length=len(Wv), feature_length=len(pf1), cnn_layers=230, kernel_size=(3,60), Wv=Wv, pf1=pf1, pf2=pf2, num_classes=num_classes)
 
     # model = nn.DataParallel(model, device_ids=[0,1]).cuda(gpu)
     model = model.cuda(gpu)
@@ -309,48 +260,82 @@ def trainModel(train, test, dev, epochs, directory, Wv, pf1, pf2, batch=50, num_
             now = time.strftime("%Y-%m-%d %H:%M:%S")
             print str(now),"\tDone Epoch",(epoch),"\tLoss:",total_loss
             torch.save({'epoch': epoch ,'state_dict': model.state_dict(),'optimizer': optimizer.state_dict()}, directory+"model_"+str(epoch))
+
+            model.eval()
+            dev_predict = get_test3(dev_label, dev_sents, dev_pos, dev_ldist, dev_rdist, dev_epos, img_h, num_classes, max_sentences, model, batch=2000)
+
+            if to_train == 1:
+                cPickle.dump(dev_predict,open(directory+"predict_prob_dev_"+str(epoch),"wb"))
+            else:
+                cPickle.dump(dev_predict,open(directory+"predict_prob_dev_temp_"+str(epoch),"wb"))
+            print "Test"
+
+            dev_pr = pr(dev_predict[3], dev_predict[2], dev_entity)
+            accuracy(dev_predict[3], dev_predict[2])
+            one_hot = []
+            results = dev_predict[3]
+            for labels in dev_label:
+                arr = np.zeros(shape=(num_classes-1,),dtype='int32')
+                for label in labels:
+                    if label != 0:
+                        arr[label-1] = 1
+                one_hot.append(arr)
+            one_hot = np.array(one_hot)
+            results = results[:,1:]
+            score = average_precision_score(one_hot, results, average='micro')
+            if to_train == 1:
+                out = open(directory+"pr_dev_"+str(epoch),"wb")
+            else:
+                out = open(directory+"pr_dev_temp_"+str(epoch),"wb")
+            for res in dev_pr[3]:
+                out.write(str(res[0])+"\t"+str(res[1])+"\n")
+            out.close()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            precision = -1
+            recall = -1
+            print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(dev_pr[0]) + "\t Recall: "+str(dev_pr[1])+ "\t Total: "+ str(dev_pr[2])
         else:
             print "Loading:","model_"+str(epoch)
             checkpoint = torch.load(directory+"model_"+str(epoch), map_location=lambda storage, loc: storage)
             model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-        model.eval()
-        test_predict = get_test3(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
-        # test_predict = visualize_attention(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
-        if to_train == 1:
-            cPickle.dump(test_predict,open(directory+"predict_prob_"+str(epoch),"wb"))
-        else:
-            cPickle.dump(test_predict,open(directory+"predict_prob_all_"+str(epoch),"wb"))
-        print "Test"
+            optimizer.load_state_dict(checkpoint['optimizer'])    
+        
+            test_predict = get_test3(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
+            # test_predict = visualize_attention(test_label, test_sents, test_pos, test_ldist, test_rdist, test_epos, img_h, num_classes, max_sentences, model, batch=2000)
+            if to_train == 1:
+                cPickle.dump(test_predict,open(directory+"predict_prob_"+str(epoch),"wb"))
+            else:
+                cPickle.dump(test_predict,open(directory+"predict_prob_temp_"+str(epoch),"wb"))
+            print "Test"
 
-        test_pr = pr(test_predict[3], test_predict[2], test_entity)
-        accuracy(test_predict[3], test_predict[2])
-        one_hot = []
-        results = test_predict[3]
-        for labels in test_label:
-            arr = np.zeros(shape=(num_classes-1,),dtype='int32')
-            for label in labels:
-                if label != 0:
-                    arr[label-1] = 1
-            one_hot.append(arr)
-        one_hot = np.array(one_hot)
-        results = results[:,1:]
-        score = average_precision_score(one_hot, results, average='micro')
-        if to_train == 1:
-            out = open(directory+"pr_"+str(epoch),"wb")
-        else:
-            out = open(directory+"pr_all_"+str(epoch),"wb")
-        for res in test_pr[3]:
-            out.write(str(res[0])+"\t"+str(res[1])+"\n")
-        out.close()
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        precision = -1
-        recall = -1
-        print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(test_pr[0]) + "\t Recall: "+str(test_pr[1])+ "\t Total: "+ str(test_pr[2])
-        now = time.strftime("%Y-%m-%d %H:%M:%S")
-        print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
-        print '\n'
-        sys.exit()
+            test_pr = pr(test_predict[3], test_predict[2], test_entity)
+            accuracy(test_predict[3], test_predict[2])
+            one_hot = []
+            results = test_predict[3]
+            for labels in test_label:
+                arr = np.zeros(shape=(num_classes-1,),dtype='int32')
+                for label in labels:
+                    if label != 0:
+                        arr[label-1] = 1
+                one_hot.append(arr)
+            one_hot = np.array(one_hot)
+            results = results[:,1:]
+            score = average_precision_score(one_hot, results, average='micro')
+            if to_train == 1:
+                out = open(directory+"pr_"+str(epoch),"wb")
+            else:
+                out = open(directory+"pr_temp_"+str(epoch),"wb")
+            for res in test_pr[3]:
+                out.write(str(res[0])+"\t"+str(res[1])+"\n")
+            out.close()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            precision = -1
+            recall = -1
+            print str(now) + '\t epoch ' + str(epoch) + "\tTest\tScore:"+str(score)+"\t Precision : "+str(test_pr[0]) + "\t Recall: "+str(test_pr[1])+ "\t Total: "+ str(test_pr[2])
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            print str(now) + '\t epoch ' + str(epoch) + ' save PR result...'
+            print '\n'
+
 
 
 def bags_decompose(data_bags):
@@ -395,10 +380,6 @@ def pr(predict_y, true_y,entity_pair):
         for j in range(1, predict_y.shape[1]):
             results.append([i,j,predict_y[i][j],entity_pair[i]])
     resultSorted = sorted(results, key=operator.itemgetter(2),reverse=True)
-    f_ = open('final_model.csv','w')
-    for g,item in enumerate(resultSorted):
-        f_.write(str(item[1]) + ":::"+str(final_labels[item[0]])+ ":::" + str(item[2])+":::"+str(item[3])+"\n")
-    f_.close()
     p_p = 0.0
     p_n = 0.0
     n_p = 0.0
@@ -413,7 +394,7 @@ def pr(predict_y, true_y,entity_pair):
         prev = item[2]
         if 0 in final_labels[item[0]]:
             if item[1] == 0:
-                continue
+                temp = 1
             else:
                 n_p += 1
         else:
@@ -425,14 +406,22 @@ def pr(predict_y, true_y,entity_pair):
             # print "Precision:",(p_p)/(p_p+n_p)
             # print "Recall",(p_p)/total
 
-        pr.append([(p_p)/(p_p+n_p+p_n), (p_p)/total])
+        try:
+            pr.append([(p_p)/(p_p+n_p+p_n), (p_p)/total])
+        except:
+            pr.append([1.0,(p_p)/total])
         if rec <= 0.3:
-            prec = (p_p)/(p_p+n_p+p_n)
+            try:
+                prec = (p_p)/(p_p+n_p+p_n)
+            except:
+                prec = 1.0
             rec = (p_p)/total
             p_p_final = p_p
             p_n_final = p_n
             n_p_final = n_p
 
+        if (p_p)/total > 0.7:
+            break
     print "p_p:",p_p_final,"n_p:",n_p_final,"p_n:",p_n_final
     return [prec,rec,total,pr]
 
@@ -598,7 +587,6 @@ def select_instance3(label, sents, pos, ldist, rdist, epos, img_h , numClasses, 
     # print e, e.shape
     results = np.zeros((totalSents, numClasses), dtype='float32')
     print "totalBatches:",totalBatches
-    print batch, x.shape[0]
     samples = x.shape[0]
     batches = _make_batches(samples, batch)
     index_array = np.arange(samples)
@@ -653,27 +641,24 @@ def select_instance3(label, sents, pos, ldist, rdist, epos, img_h , numClasses, 
 
 
 if __name__ == "__main__":
-    inputdir = "NRE_processed/"
+    if len(sys.argv) < 6:
+        print "Please enter the arguments correctly!"
+        sys.exit()
+
+    inputdir = sys.argv[1] + "/"
     resultdir = inputdir
-    resultdir = "/scratchd/home/siddesh/DocumentTimestamp/PCNN+ATT/PCNN_EntityAttention_final_fixed_"+resultdir
+    resultdir = "PCNN/"
     print 'result dir='+resultdir
     if not os.path.exists(resultdir):
         os.mkdir(resultdir)
 
+
     dataType = "_features_all_6Months"
-    test = cPickle.load(open(inputdir+'/test_full_final_3_80.p'))
-    train = cPickle.load(open(inputdir+'/train_3_80.p'))
-    # train = test
-    # random.shuffle(test)
-    # dev = test[:10000]
-    # test_reduced = test[10000:]
-    # cPickle.dump(test_reduced,open(inputdir+"test_90percent.p","w"))
-    # cPickle.dump(dev,open(inputdir+"test_10percent.p","w"))
-    # dev = cPickle.load(open(inputdir+"test_10percent.p"))
-    # train = []
-    # train = test = []
+    test = cPickle.load(open(inputdir+sys.argv[3]))
+    train = cPickle.load(open(inputdir+sys.argv[2]))
+    dev = cPickle.load(open(inputdir+sys.argv[4]))
     print 'load Wv ...'
-    Wv = np.array(cPickle.load(open(inputdir+'/Wv.p')))
+    Wv = np.array(cPickle.load(open(inputdir+sys.argv[5])))
 
     # Wv = np.random.random((10,50))
     # Wv[0] = Wv[0]*0
@@ -689,9 +674,9 @@ if __name__ == "__main__":
     print PF2[0]
     trainModel(train,
                     test,
-                    [],
-                    1300,
-    				resultdir,
+                    dev,
+                    50,
+                    resultdir,
                     Wv,
                     PF1,
-                    PF2,batch=50, test_epoch=25, to_train=0)
+                    PF2,batch=50, test_epoch=0, to_train=1, num_classes=53)
