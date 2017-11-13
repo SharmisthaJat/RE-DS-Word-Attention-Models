@@ -5,10 +5,16 @@ Abstract: Distant Supervision (DS) is a popular technique for developing relatio
 
 ## Preprocessing the files
 
-The folder `Code/Preprocess/` has the files for preprocessing the data. Just run the file `preprocess.sh` to get the output files in the same folder. There will be some intermediate files, but the final processed files will have the following name:
-1. train_final.p : The processed train files
-2. test_final.p : The processed test files
-3. dev_final.p : The processed dev files
+The folder `Code/Preprocess/` has the files for preprocessing the data. 
+For the **Reidel2010** dataset, just run the file `preprocess.sh` to get the output files in the same folder. There will be some intermediate files, but the final processed files will have the following name:
+a. train_final.p : The processed train files
+b. test_final.p : The processed test files
+c. dev_final.p : The processed dev files
+
+For the **GIDS** dataset, just run the file `preprocess_GIDS.sh` to get the output files in the same folder. There will be some intermediate files, but the final processed files will have the following name:
+a. train_final.p : The processed train files
+b. test_final.p : The processed test files
+c. dev_final.p : The processed dev files
 
 ## Running the Model Files
 
