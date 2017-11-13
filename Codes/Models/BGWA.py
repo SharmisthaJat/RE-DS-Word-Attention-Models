@@ -347,6 +347,18 @@ def bags_decompose(data_bags):
     bag_epos = [data_bag.entity_pos for data_bag in data_bags]
     return [bag_label, bag_sent, bag_pos, bag_ldist, bag_rdist, bag_entity, bag_epos]
 
+def accuracy(predict_y, true_y):
+    correct = 0
+    count = 0
+    for i,label in enumerate(true_y):
+        if len(true_y[i]) ==1 and true_y[i][0] == 0:
+            continue
+        else:
+            count += 1
+            if np.argmax(predict_y[i]) in true_y[i]:
+                correct += 1
+    print "accuracy: ",float(correct)/count, correct, count
+    
 def pr(predict_y, true_y,entity_pair):
     final_labels = []
     for label in true_y:
