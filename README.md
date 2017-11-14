@@ -55,3 +55,10 @@ For the **GIDS** dataset, just run the file `preprocess_GIDS.sh` to get the outp
 3. dev_final.p : The processed dev files
 
 For the two datasets used in the paper you can find pre-processed files at 'Data/Ensemble_Data/gids/preprocessed_dataset/' and 'Data/Ensemble_Data/riedel2010/preprocessed_dataset.zip' (extract in same folder)
+
+# Saved Models and PR files
+
+Find all the models and saved pr files from the following public link:
+```
+https://www.dropbox.com/s/69j59s81d8bxaa5/RE-best-models.zip?dl=0
+```
