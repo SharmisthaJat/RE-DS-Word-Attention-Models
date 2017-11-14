@@ -61,3 +61,5 @@ For the two datasets used in the paper you can find pre-processed files at 'Data
 Find all the models and saved pr files from the following public link:
 
 [Results_&_ Models](https://www.dropbox.com/s/69j59s81d8bxaa5/RE-best-models.zip?dl=0)
+
+(Generated Precision-Recall (PR) files have precision in 1st column and recall in the second column)
