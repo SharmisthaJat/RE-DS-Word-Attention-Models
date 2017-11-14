@@ -1,4 +1,4 @@
-# BNET-DS
+# RE-DS-Word-Attention-Models
 
 Abstract: Distant Supervision (DS) is a popular technique for developing relation extractors starting with limited supervision. We note that most of the sentences in the distant supervision setting are very long and may bene t from word attention for better sentence representation. Our contributions in this paper are threefold. Firstly, we propose two novel word attention models for distantly-supervised relation extraction: (1) a Bi-GRU based word attention model (BGWA), (2) an entity-centric attention model (EA), and a combination model which combines multiple complementary models using weighted voting method for improved relation extraction. Secondly, we introduce GDS, a new distant supervision dataset for relation extraction. GDS removes test data noise present in all previous distant-supervision benchmark datasets, making credible automatic evaluation possible. Thirdly, through extensive experiments on multiple real-world datasets, we demonstrate effectiveness of the proposed methods
 
