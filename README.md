@@ -4,10 +4,10 @@ Abstract: Distant Supervision (DS) is a popular technique for developing relatio
 
 ## Software required
 
-python 2.7
-pytorch 0.1.12
-cuda 8.0
-numpy 1.12.1
+python 2.7, 
+pytorch 0.1.12, 
+cuda 8.0, 
+numpy 1.12.1, 
 sklearn 0.18.2 
 
 ## Running the Model Files
