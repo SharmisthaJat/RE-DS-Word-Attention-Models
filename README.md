@@ -59,6 +59,5 @@ For the two datasets used in the paper you can find pre-processed files at 'Data
 # Saved Models and PR files
 
 Find all the models and saved pr files from the following public link:
-```
-https://www.dropbox.com/s/69j59s81d8bxaa5/RE-best-models.zip?dl=0
-```
+
+[Results_&_ Models](https://www.dropbox.com/s/69j59s81d8bxaa5/RE-best-models.zip?dl=0)
