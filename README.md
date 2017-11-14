@@ -31,9 +31,15 @@ The command has 5 arguments
 
 File 4 can be run using the following command
 
+```
 python2.7 ENSEMBLE.py <path_to_dataset_ensemble_files>
 
+```
 e.g: Codes/Models$ python2.7 ENSEMBLE.py ../../Data/Ensemble_Data/gids/ 
+
+Please extract the preprocessed files for riedel dataset before using ensemble model by running the following command
+
+Codes/Models$ unzip ../../Data/Ensemble_Data/riedel2010/preprocessed_dataset.zip
 
 ## Preprocessing the files
 
@@ -48,4 +54,4 @@ For the **GIDS** dataset, just run the file `preprocess_GIDS.sh` to get the outp
 2. test_final.p : The processed test files
 3. dev_final.p : The processed dev files
 
-
+For the two datasets used in the paper you can find pre-processed files at 'Data/Ensemble_Data/gids/preprocessed_dataset/' and 'Data/Ensemble_Data/riedel2010/preprocessed_dataset.zip' (extract in same folder)
