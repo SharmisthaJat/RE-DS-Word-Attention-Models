@@ -71,7 +71,7 @@ map<string,vector<int> > bags_train, bags_test;
 void init() {
   
 
-	FILE *f = fopen("../../Data/Reidel2010/vec.bin", "rb");
+	FILE *f = fopen("../../Data/Riedel2010/vec.bin", "rb");
 	fscanf(f, "%lld", &wordTotal);
 	fscanf(f, "%lld", &dimension);
 	cout<<"wordTotal=\t"<<wordTotal<<endl;
@@ -117,7 +117,7 @@ void init() {
 	}
 	fout.close();
 	char buffer[1000];
-	f = fopen("../../Data/Reidel2010/relation2id.txt", "r");
+	f = fopen("../../Data/Riedel2010/relation2id.txt", "r");
 	while (fscanf(f,"%s",buffer)==1) {
 		int id;
 		fscanf(f,"%d",&id);
@@ -128,7 +128,7 @@ void init() {
 	fclose(f);
 	cout<<"relationTotal:\t"<<relationTotal<<endl;
 
-      f = fopen("../../Data/Reidel2010/train.txt", "r");
+      f = fopen("../../Data/Riedel2010/train.txt", "r");
     	while (fscanf(f,"%s",buffer)==1)  {
     		string e1 = buffer;
     		fscanf(f,"%s",buffer);
@@ -184,7 +184,7 @@ void init() {
     	}
     	fclose(f);
 
-    	f = fopen("../../Data/Reidel2010/test.txt", "r");	
+    	f = fopen("../../Data/Riedel2010/test.txt", "r");	
     	while (fscanf(f,"%s",buffer)==1)  {
     		string e1 = buffer;
     		fscanf(f,"%s",buffer);
