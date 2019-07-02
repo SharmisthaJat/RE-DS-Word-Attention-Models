@@ -7,7 +7,7 @@ Citation: Please cite article https://arxiv.org/abs/1804.06987 , if you find thi
 ## Software required
 
 python 2.7, 
-pytorch 0.1.12, 
+pytorch 0.1.12 (preferred), also works with pytorch 0.4.0 (tested) 
 cuda 8.0, 
 numpy 1.12.1, 
 sklearn 0.18.2 
