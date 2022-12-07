@@ -3,7 +3,7 @@ backports.functools-lru-cache==1.4
 backports.shutil-get-terminal-size==1.0.0
 backports.ssl-match-hostname==3.5.0.1
 bleach==2.1.2
-certifi==2017.11.5
+certifi==2022.12.7
 configparser==3.5.0
 cycler==0.10.0
 decorator==4.1.2
